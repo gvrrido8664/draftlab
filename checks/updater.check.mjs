@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync,readFileSync,rmSync,rmdirSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {openStore,normalizeMatch} from '../scripts/match-store.mjs';
+const dir=mkdtempSync(join(tmpdir(),'draftlab-check-'));
+const seed=JSON.parse(readFileSync(new URL('../public/data/meta.json',import.meta.url),'utf8'));
+let store=openStore(join(dir,'test.sqlite'),seed);
+try{
+ const original=store.summary().total;assert.equal(original,seed.games.length);
+ assert.equal(store.add(seed.games[0].id,seed.patch,seed.games[0].date,seed.games[0]),false);
+ assert.equal(store.summary().total,original);
+ store.add('LA2_TEST','16.17',1,{id:'LA2_TEST',date:1,teams:[]});
+ store.add('LA2_REJECT','16.18',1,null,'Menos de 15 minutos');
+ assert.equal(store.summary().total,original+1);assert.equal(store.summary().checked,original+2);
+ assert.equal(store.snapshot(seed.patch).games.length,original);
+ store.set('job',{status:'paused',completed:7});store.db.close();store=openStore(join(dir,'test.sqlite'),seed);
+ assert.equal(store.summary().total,original+1);assert.equal(store.get('job',null).completed,7);
+ const body={metadata:{matchId:'LA2_1'},info:{queueId:420,gameVersion:'16.18.9',gameCreation:1,gameDuration:1800,teams:[{teamId:100,win:true,bans:[]},{teamId:200,win:false,bans:[]}],participants:[100,200].flatMap(teamId=>['TOP','JUNGLE','MIDDLE','BOTTOM','UTILITY'].map((teamPosition,i)=>({teamId,teamPosition,championId:i+1})))}};
+ assert(normalizeMatch('LA2_1',body,{1:'Ornn',2:'Vi',3:'Ahri',4:'Jinx',5:'Lulu'}).data);
+ body.info.gameDuration=100;assert.equal(normalizeMatch('LA2_1',body,{}).reason,'Menos de 15 minutos');
+ assert.throws(()=>normalizeMatch('LA2_other',body,{}));
+ console.log('PASS: durable cumulative storage, deduplication, patch separation, rejected records, resume state and Riot response validation.');
+}finally{store.db.close();rmSync(join(dir,'test.sqlite'),{force:true});rmSync(join(dir,'test.sqlite-wal'),{force:true});rmSync(join(dir,'test.sqlite-shm'),{force:true});rmdirSync(dir);}
+const origin='http://127.0.0.1:5180';
+const status=await(await fetch(`${origin}/api/status`)).json();assert.equal(status.app,'draftlab-updater');assert.equal(status.job.players,undefined);assert.equal(status.job.queue,undefined);
+assert.equal((await fetch(`${origin}/api/start`,{method:'POST',headers:{origin:'https://other.invalid'}})).status,403);
+assert.equal((await fetch(`${origin}/api/settings`,{method:'POST',headers:{origin,'Content-Type':'application/json'},body:'{"auto":true,"hours":0}'})).status,400);
+assert.equal((await fetch(`${origin}/api/export?patch=invalid`)).status,400);
+console.log('PASS: local status API, hidden scouting IDs, origin protection and input validation.');

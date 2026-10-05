@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+const origin='http://localhost:5173';
+assert.equal((await fetch(`${origin}/api/workspace`)).status,401);
+const login=await fetch(`${origin}/signin-with-chatgpt?return_to=/`,{redirect:'manual'});
+const cookie=login.headers.get('set-cookie')?.split(';')[0];assert(cookie,'Local preview sign-in must be available');
+const headers={cookie,origin,'Content-Type':'application/json'};
+const before=await(await fetch(`${origin}/api/workspace`,{headers})).json();
+assert(before.workspace,'Save a draft in the local UI before this integration check.');
+const put=body=>fetch(`${origin}/api/workspace`,{method:'PUT',headers,body:JSON.stringify(body)});
+const denied=await fetch(`${origin}/api/workspace`,{method:'PUT',headers:{...headers,origin:'https://untrusted.invalid'},body:'{}'});assert.equal(denied.status,403);
+assert.equal((await put({revision:before.revision,workspace:{...before.workspace,unexpected:true}})).status,400);
+const saved=await put({workspace:before.workspace,revision:before.revision});assert.equal(saved.status,200);const result=await saved.json();assert.equal(result.revision,before.revision+1);
+assert.equal((await put({workspace:before.workspace,revision:before.revision})).status,409);
+const after=await(await fetch(`${origin}/api/workspace`,{headers})).json();assert.deepEqual(after.workspace,before.workspace);
+console.log('PASS: authentication, origin validation, schema validation, persisted state, concurrent-write conflict.');
